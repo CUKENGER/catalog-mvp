@@ -48,7 +48,7 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
       S3_ENDPOINT_URL: http://minio:9000
-      S3_PUBLIC_BASE_URL: http://localhost:9000
+      S3_PUBLIC_BASE_URL: ${S3_PUBLIC_BASE_URL:-http://localhost:9000}
       S3_BUCKET: catalog
       S3_ACCESS_KEY: ${MINIO_ROOT_USER}
       S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
@@ -65,7 +65,7 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
       S3_ENDPOINT_URL: http://minio:9000
-      S3_PUBLIC_BASE_URL: http://localhost:9000
+      S3_PUBLIC_BASE_URL: ${S3_PUBLIC_BASE_URL:-http://localhost:9000}
       S3_BUCKET: catalog
       S3_ACCESS_KEY: ${MINIO_ROOT_USER}
       S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
@@ -80,6 +80,40 @@ services:
       minio-init:
         condition: service_completed_successfully
     restart: unless-stopped
+
+  bot:
+    profiles: ["bot"]
+    build:
+      context: ./bot
+    environment:
+      BOT_TOKEN: ${BOT_TOKEN:-}
+      ADMIN_TELEGRAM_IDS: ${ADMIN_TELEGRAM_IDS:-}
+      WEBHOOK_BASE_URL: ${WEBHOOK_BASE_URL:-}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-}
+      MINI_APP_URL: ${MINI_APP_URL:-}
+      CATALOG_API_URL: http://api:8000
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
+      MAX_IMAGE_SIZE_BYTES: 8388608
+      PORT: 8080
+    ports:
+      - "8080:8080"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    environment:
+      CATALOG_API_URL: http://api:8000/api/products
+      HOSTNAME: 0.0.0.0
+      PORT: 3000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+    restart: unless-stopped
+
 
 volumes:
   postgres_data:
