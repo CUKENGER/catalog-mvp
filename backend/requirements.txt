@@ -1,0 +1,8 @@
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30,<1
+SQLAlchemy[asyncio]>=2,<3
+asyncpg>=0.29,<1
+boto3>=1.35,<2
+pydantic-settings>=2,<3
+python-multipart>=0.0.9,<1
+Pillow>=10,<13
