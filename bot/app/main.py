@@ -1,10 +1,11 @@
+import asyncio
 import hmac
 import logging
 import os
 
 import httpx
-from aiohttp import web
 from aiogram import Bot, Dispatcher
+from aiogram.exceptions import TelegramRetryAfter
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
     InlineKeyboardButton,
@@ -13,7 +14,7 @@ from aiogram.types import (
     Update,
     WebAppInfo,
 )
-
+from aiohttp import web
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -24,7 +25,7 @@ WEBHOOK_SECRET = os.environ["WEBHOOK_SECRET"]
 CATALOG_API_URL = os.getenv("CATALOG_API_URL", "http://api:8000").rstrip("/")
 INTERNAL_API_TOKEN = os.environ["INTERNAL_API_TOKEN"]
 MINI_APP_URL = os.getenv("MINI_APP_URL", "").strip()
-MAX_IMAGE_SIZE_BYTES = int(os.getenv("MAX_IMAGE_SIZE_BYTES", 8 * 1024 * 1024))
+MAX_IMAGE_SIZE_BYTES = int(os.getenv("MAX_IMAGE_SIZE_BYTES", str(8 * 1024 * 1024)))
 ADMIN_IDS = {
     int(value.strip())
     for value in os.getenv("ADMIN_TELEGRAM_IDS", "").split(",")
@@ -48,25 +49,27 @@ def is_admin(message: Message) -> bool:
     return message.from_user is not None and message.from_user.id in ADMIN_IDS
 
 
+def catalog_keyboard() -> InlineKeyboardMarkup | None:
+    if not MINI_APP_URL:
+        return None
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Открыть каталог",
+                    web_app=WebAppInfo(url=MINI_APP_URL),
+                )
+            ]
+        ]
+    )
+
+
 @dispatcher.message(CommandStart())
 async def start(message: Message) -> None:
-    keyboard = None
-
-    if MINI_APP_URL:
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="Открыть каталог",
-                        web_app=WebAppInfo(url=MINI_APP_URL),
-                    )
-                ]
-            ]
-        )
-
     await message.answer(
         "У меня есть товар. Открой каталог:",
-        reply_markup=keyboard,
+        reply_markup=catalog_keyboard(),
     )
 
 
@@ -92,9 +95,7 @@ async def receive_product_photo(
 
     name = (message.caption or "").strip()
     if not name:
-        await message.answer(
-            "Добавьте название товара в подпись к фотографии."
-        )
+        await message.answer("Добавьте название товара в подпись к фотографии.")
         return
 
     if len(name) > 160:
@@ -120,9 +121,7 @@ async def receive_product_photo(
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.post(
             f"{CATALOG_API_URL}/api/admin/products",
-            headers={
-                "Authorization": f"Bearer {INTERNAL_API_TOKEN}",
-            },
+            headers={"Authorization": f"Bearer {INTERNAL_API_TOKEN}"},
             data={
                 "name": name,
                 "source_update_id": str(telegram_update_id),
@@ -149,13 +148,24 @@ async def receive_product_photo(
     await message.answer(f"Товар «{product['name']}» добавлен в каталог.")
 
 
-async def telegram_webhook(request: web.Request) -> web.Response:
-    received_secret = request.headers.get(
-        "X-Telegram-Bot-Api-Secret-Token",
-        "",
+@dispatcher.message()
+async def fallback(message: Message) -> None:
+    # Регистрируется последним: срабатывает только тогда,
+    # когда ни один из обработчиков выше не подошёл.
+    await message.answer(
+        "У меня есть товар. Открой каталог:",
+        reply_markup=catalog_keyboard(),
     )
 
-    if not hmac.compare_digest(received_secret, WEBHOOK_SECRET):
+
+async def telegram_webhook(request: web.Request) -> web.Response:
+    received_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+
+    # compare_digest сравнивает байты: со строками с не-ASCII символами он падает.
+    if not hmac.compare_digest(
+        received_secret.encode(),
+        WEBHOOK_SECRET.encode(),
+    ):
         return web.Response(status=403, text="Forbidden")
 
     try:
@@ -177,13 +187,34 @@ async def telegram_webhook(request: web.Request) -> web.Response:
     return web.Response(text="ok")
 
 
+async def set_webhook_with_retry(max_attempts: int = 5) -> None:
+    # Реплики стартуют одновременно, и Telegram может вернуть flood control.
+    # В этом случае ждём указанное время и пробуем снова, а не падаем.
+    for attempt in range(1, max_attempts + 1):
+        try:
+            await bot.set_webhook(
+                url=f"{WEBHOOK_BASE_URL}/telegram/webhook",
+                secret_token=WEBHOOK_SECRET,
+                allowed_updates=dispatcher.resolve_used_update_types(),
+            )
+        except TelegramRetryAfter as error:
+            logger.warning(
+                "setWebhook rate limited (attempt %s/%s), retry in %s s",
+                attempt,
+                max_attempts,
+                error.retry_after,
+            )
+            await asyncio.sleep(error.retry_after)
+            continue
+
+        logger.info("Telegram webhook configured")
+        return
+
+    raise RuntimeError("Не удалось установить webhook после нескольких попыток")
+
+
 async def on_startup(_: web.Application) -> None:
-    await bot.set_webhook(
-        url=f"{WEBHOOK_BASE_URL}/telegram/webhook",
-        secret_token=WEBHOOK_SECRET,
-        allowed_updates=dispatcher.resolve_used_update_types(),
-    )
-    logger.info("Telegram webhook configured")
+    await set_webhook_with_retry()
 
 
 async def on_cleanup(_: web.Application) -> None:
