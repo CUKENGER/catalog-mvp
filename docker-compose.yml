@@ -135,6 +135,7 @@ services:
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
       - --entrypoints.web.address=:80
+      - --accesslog=true
     ports:
       - "8080:80"
     volumes:

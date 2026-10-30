@@ -140,8 +140,6 @@ async def receive_product_photo(
         await message.answer("Не удалось добавить товар. Проверьте название и фото.")
         return
 
-    # Ошибки сети и 5xx не подавляем: webhook должен вернуть ошибку,
-    # чтобы Telegram мог повторить доставку update.
     response.raise_for_status()
 
     product = response.json()
@@ -150,8 +148,6 @@ async def receive_product_photo(
 
 @dispatcher.message()
 async def fallback(message: Message) -> None:
-    # Регистрируется последним: срабатывает только тогда,
-    # когда ни один из обработчиков выше не подошёл.
     await message.answer(
         "У меня есть товар. Открой каталог:",
         reply_markup=catalog_keyboard(),
@@ -161,7 +157,6 @@ async def fallback(message: Message) -> None:
 async def telegram_webhook(request: web.Request) -> web.Response:
     received_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
 
-    # compare_digest сравнивает байты: со строками с не-ASCII символами он падает.
     if not hmac.compare_digest(
         received_secret.encode(),
         WEBHOOK_SECRET.encode(),
@@ -188,8 +183,6 @@ async def telegram_webhook(request: web.Request) -> web.Response:
 
 
 async def set_webhook_with_retry(max_attempts: int = 5) -> None:
-    # Реплики стартуют одновременно, и Telegram может вернуть flood control.
-    # В этом случае ждём указанное время и пробуем снова, а не падаем.
     for attempt in range(1, max_attempts + 1):
         try:
             await bot.set_webhook(
